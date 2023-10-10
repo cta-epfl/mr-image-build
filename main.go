@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -65,7 +66,7 @@ func (app *App) build(contextDir string, dockerfile string, imageName string, im
 }
 
 func (app *App) prepareEnv(branch string, commit string) (string, error) {
-	folder, err := os.MkdirTemp("", "")
+	folder, err := os.MkdirTemp("", "tmp")
 	if err != nil {
 		return "", err
 	}
@@ -78,10 +79,13 @@ func (app *App) prepareEnv(branch string, commit string) (string, error) {
 
 	g, err := git.NewGit(folder, gitUrl, branch)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("unable to clone repo: %w", err)
 	}
 	err = g.Checkout(commit)
-	return folder, err
+	if err != nil {
+		return "", fmt.Errorf("unable to checkout commit: %w", err)
+	}
+	return folder, nil
 }
 
 func (app *App) loopMr() {
@@ -118,6 +122,7 @@ func (app *App) loopMr() {
 			envFolder, err := app.prepareEnv(mergeRequest.SourceBranch, latestCommit.ID)
 			if err != nil {
 				log.Printf("Error while cloning MR environement: %s", err)
+				continue
 			}
 
 			// Build image
@@ -144,6 +149,7 @@ func (app *App) loopStaging() {
 		envFolder, err := app.prepareEnv(STAGING_BRANCH, branche.Commit.ID)
 		if err != nil {
 			log.Printf("Error while cloning staging environement: %s", err)
+			return
 		}
 
 		// Build image
@@ -183,7 +189,8 @@ func (app *App) loopProduction() {
 		// Prepare environment
 		envFolder, err := app.prepareEnv(PRODUCTION_BRANCH, latestTagCommit)
 		if err != nil {
-			log.Printf("Error while cloning environement: %s", err)
+			log.Printf("Error while cloning production environement: %s", err)
+			return
 		}
 
 		// Build image
