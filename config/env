@@ -1,0 +1,6 @@
+KUBE_SECRET=flux-system
+GIT_BRANCH=main
+GITLAB_URL=https://gitlab.cta-observatory.org
+GITLAB_PROJECT_ID=cta-computing/suss/sdc-portal/prototypes/ctao-esap-sdc-portal
+GITLAB_TOKEN=
+ENV_PREFIX=esap-mr-

@@ -1,0 +1,151 @@
+---
+# This Deployment frequently fetches registry tokens and applies them as an imagePullSecret.
+# It's done as a 1-replica Deployment rather than a CronJob, because CronJob scheduling can
+# block cluster bootstraps and cold-reboots from obtaining registry tokens for a considerable time.
+# This deployment will immediately fetch a token, which reduces latency for working image updates.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ephemeral-environment-controller
+  namespace: flux-system
+spec:
+  selector:
+    matchLabels:
+      app: ephemeral-environment-controller
+  replicas: 1
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      serviceAccount: ephemeral-environment-controller
+      containers:
+        - image: docker.io/ph0tonic/gitops-toolkit:dev
+          name: controller
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: ephemeral-environment-controller
+          env:
+            - name: TARGET_BRANCH
+              value: main
+          # command:
+          #   - "sh"
+          resources: {}
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - mountPath: /app/ssh_keys
+              name: keys
+            - mountPath: /app/clonedir
+              name: clonedir
+            - mountPath: /tmp
+              name: tmpfs
+      volumes:
+        - name: keys
+          secret:
+            secretName: KUBE_SECRET_PLACEHOLDER
+            defaultMode: 0400
+        - name: clonedir
+          emptyDir: {}
+        - name: tmpfs
+          emptyDir:
+            medium: Memory
+
+# RBAC necessary for our Deployment to apply our imagePullSecret
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ephemeral-environment-controller
+  namespace: flux-system
+rules:
+  - apiGroups: [""]
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - update
+      - patch
+    resourceNames:
+      - KUBE_SECRET_PLACEHOLDER # templated from kustomize vars referencing ConfigMap, also see kustomizeconfig.yaml
+  - apiGroups: [""]
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - create
+      - delete
+      - list
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources:
+      - kustomizations
+    verbs:
+      - get
+      - create
+      - update
+      - patch
+      - delete
+      - list
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources:
+      - gitrepositories
+    verbs:
+      - get
+      - create
+      - update
+      - patch
+      - delete
+      - list
+    # # Lock this down to the specific Secret name  (Optional)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ephemeral-environment-controller
+  namespace: flux-system
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - create
+      - delete
+      - list
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ephemeral-environment-controller
+  namespace: flux-system
+subjects:
+  - kind: ServiceAccount
+    name: ephemeral-environment-controller
+roleRef:
+  kind: Role
+  name: ephemeral-environment-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ephemeral-environment-controller
+  namespace: flux-system
+subjects:
+  - kind: ServiceAccount
+    name: ephemeral-environment-controller
+roleRef:
+  kind: ClusterRole
+  name: ephemeral-environment-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ephemeral-environment-controller
+  namespace: flux-system
