@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -71,8 +72,12 @@ func (app *App) prepareEnv(branch string, commit string) (string, error) {
 	}
 
 	// clone env at provided commit
-	const REPO_NAME = "Test"
-	g, err := git.NewGit(folder, REPO_NAME, branch)
+	token := os.Getenv("GITLAB_TOKEN")
+	repository := os.Getenv("GITLAB_URL")
+
+	gitUrl := strings.Replace(repository, "https://", "https://oauth2:"+token+"@", 1)
+
+	g, err := git.NewGit(folder, gitUrl, branch)
 	if err != nil {
 		return "", err
 	}
