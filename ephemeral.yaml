@@ -23,7 +23,7 @@ spec:
         fsGroup: 1000
       serviceAccount: ephemeral-environment-controller
       containers:
-        - image: docker.io/ph0tonic/gitops-toolkit:dev
+        - image: docker.io/ph0tonic/img-build-toolkit:dev
           name: controller
           imagePullPolicy: Always
           envFrom:

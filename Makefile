@@ -1,4 +1,4 @@
-TAG=ph0tonic/img-build-toolkit:dev
+TAG=ph0tonic/image-build-toolkit:dev
 
 all: build
  

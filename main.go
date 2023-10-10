@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"cta.epfl.ch/mr-feature-controller/git"
-	"cta.epfl.ch/mr-feature-controller/utils"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/xanzy/go-gitlab"
@@ -246,9 +245,6 @@ func (app *App) Run() {
 func main() {
 	log.Println("Starting server")
 
-	utils.InitSshConfig()
-
-	// Watched repository
 	gitlabUrl := os.Getenv("GITLAB_URL")
 	gitlabToken := os.Getenv("GITLAB_TOKEN")
 	gitlabApi, err := gitlab.NewClient(gitlabToken, gitlab.WithBaseURL(gitlabUrl))
