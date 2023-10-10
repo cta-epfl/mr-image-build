@@ -29,8 +29,8 @@ const (
 )
 
 const IMAGE_REGISTRY = "gitlab.cta-observatory.org:5555/bastien.wermeille/ctao-esap-sdc-portal/esap-mr"
-const STAGING_BRANCH = "master"
-const PRODUCTION_BRANCH = "master"
+const STAGING_BRANCH = "main"
+const PRODUCTION_BRANCH = "main"
 
 // TODO: Create new config struct -> including pid, target_branch and so on
 type App struct {
