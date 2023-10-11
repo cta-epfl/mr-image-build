@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -12,8 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"cta.epfl.ch/mr-feature-controller/git"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/xanzy/go-gitlab"
@@ -54,38 +53,36 @@ func NewApp(gitlabApi *gitlab.Client, pid string) *App {
 	}
 }
 
-func (app *App) build(contextDir string, dockerfile string, imageName string, imageTag string) error {
+func (app *App) build(context string, dockerfile string, imageName string, imageTag string) error {
 	// TODO: launch kaniko with the right context, dockerfile and registryTag
 	cmd := exec.Command("/kaniko/executor",
-		"--context", contextDir,
-		"--dockerfile", filepath.Join(contextDir, dockerfile),
-		"--destination", imageName+":"+imageTag)
+		"-c", context,
+		"-f", filepath.Join(context, dockerfile),
+		"-d", imageName+":"+imageTag)
 
-	// TODO: Launch a few build instances in parallele
-	return cmd.Run()
+	var outb, errb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println("out:", outb.String(), "err:", errb.String())
+	}
+	return err
 }
 
-func (app *App) prepareEnv(branch string, commit string) (string, error) {
-	folder, err := os.MkdirTemp("", "tmp")
-	if err != nil {
-		return "", err
-	}
-
+func (app *App) prepareContext(branch string, commit string) (string, error) {
 	// clone env at provided commit
 	token := os.Getenv("GITLAB_TOKEN")
 	repository := os.Getenv("GITLAB_URL")
+	fmt.Printf("Prepare context : %s", strings.Replace(repository, "https://", "git://oauth2:"+"TOKEN"+"@", 1))
+	gitUrl := strings.Replace(repository, "https://", "git://oauth2:"+token+"@", 1)
 
-	gitUrl := strings.Replace(repository, "https://", "https://oauth2:"+token+"@", 1)
+	url := gitUrl + "#refs/heads/" + branch
+	if commit != "" {
+		url = url + "#" + commit
+	}
 
-	g, err := git.NewGit(folder, gitUrl, branch)
-	if err != nil {
-		return "", fmt.Errorf("unable to clone repo: %w", err)
-	}
-	err = g.Checkout(commit)
-	if err != nil {
-		return "", fmt.Errorf("unable to checkout commit: %w", err)
-	}
-	return folder, nil
+	return url, nil
 }
 
 func (app *App) loopMr() {
@@ -119,18 +116,18 @@ func (app *App) loopMr() {
 
 		if _, ok := app.stagingCommit[latestCommit.ID]; !ok {
 			// Prepare environment
-			envFolder, err := app.prepareEnv(mergeRequest.SourceBranch, latestCommit.ID)
+			context, err := app.prepareContext(mergeRequest.SourceBranch, latestCommit.ID)
 			if err != nil {
 				log.Printf("Error while cloning MR environement: %s", err)
 				continue
 			}
 
 			// Build image
-			err = app.build(envFolder, "esap/Dockerfile", IMAGE_REGISTRY, latestCommit.ID)
+			err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, latestCommit.ID)
 			app.prodCommits[latestCommit.ID] = true
 
 			if err != nil {
-				log.Printf("Error while building MR image %s: %s", mergeRequest.ID, err)
+				log.Printf("Error while building MR image %d: %s", mergeRequest.ID, err)
 			}
 		}
 	}
@@ -146,7 +143,7 @@ func (app *App) loopStaging() {
 
 	if _, ok := app.stagingCommit[branche.Commit.ID]; !ok {
 		// Prepare environment
-		envFolder, err := app.prepareEnv(STAGING_BRANCH, branche.Commit.ID)
+		context, err := app.prepareContext(STAGING_BRANCH, branche.Commit.ID)
 		if err != nil {
 			log.Printf("Error while cloning staging environement: %s", err)
 			return
@@ -154,7 +151,7 @@ func (app *App) loopStaging() {
 
 		// Build image
 		versionId := strconv.Itoa(int(branche.Commit.CommittedDate.Unix()))
-		err = app.build(envFolder, "esap/Dockerfile", IMAGE_REGISTRY, versionId)
+		err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, versionId)
 		app.prodCommits[versionId] = true
 
 		if err != nil {
@@ -187,14 +184,14 @@ func (app *App) loopProduction() {
 
 	if _, ok := app.prodCommits[latestTag]; !ok {
 		// Prepare environment
-		envFolder, err := app.prepareEnv(PRODUCTION_BRANCH, latestTagCommit)
+		context, err := app.prepareContext(PRODUCTION_BRANCH, latestTagCommit)
 		if err != nil {
 			log.Printf("Error while cloning production environement: %s", err)
 			return
 		}
 
 		// Build image
-		err = app.build(envFolder, "esap/Dockerfile", IMAGE_REGISTRY, latestTag)
+		err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, latestTag)
 		app.prodCommits[latestTag] = true
 
 		if err != nil {
