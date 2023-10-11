@@ -60,7 +60,7 @@ spec:
 kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: ephemeral-environment-controller
+  name: image-build-environment-controller
   namespace: flux-system
 rules:
   - apiGroups: [""]
@@ -68,55 +68,19 @@ rules:
       - secrets
     verbs:
       - get
-      - create
-      - update
-      - patch
     resourceNames:
       - KUBE_SECRET_PLACEHOLDER # templated from kustomize vars referencing ConfigMap, also see kustomizeconfig.yaml
   - apiGroups: [""]
     resources:
-      - namespaces
+      - pods
     verbs:
       - get
-      - create
-      - delete
+      - watch
       - list
-  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
-    resources:
-      - kustomizations
-    verbs:
-      - get
       - create
       - update
       - patch
       - delete
-      - list
-  - apiGroups: ["source.toolkit.fluxcd.io"]
-    resources:
-      - gitrepositories
-    verbs:
-      - get
-      - create
-      - update
-      - patch
-      - delete
-      - list
-    # # Lock this down to the specific Secret name  (Optional)
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: ephemeral-environment-controller
-  namespace: flux-system
-rules:
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources:
-      - namespaces
-    verbs:
-      - get
-      - create
-      - delete
-      - list
 ---
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -128,19 +92,6 @@ subjects:
     name: ephemeral-environment-controller
 roleRef:
   kind: Role
-  name: ephemeral-environment-controller
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: ephemeral-environment-controller
-  namespace: flux-system
-subjects:
-  - kind: ServiceAccount
-    name: ephemeral-environment-controller
-roleRef:
-  kind: ClusterRole
   name: ephemeral-environment-controller
   apiGroup: rbac.authorization.k8s.io
 ---
