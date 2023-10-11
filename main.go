@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,6 +15,10 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/xanzy/go-gitlab"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 type MrDeployStatus int64
@@ -34,18 +37,20 @@ const PRODUCTION_BRANCH = "main"
 
 // TODO: Create new config struct -> including pid, target_branch and so on
 type App struct {
-	gitlab *gitlab.Client
-	pid    string
+	gitlab    *gitlab.Client
+	pid       string
+	k8sClient *kubernetes.Clientset
 
 	mrCommits     map[string]bool
 	prodCommits   map[string]bool
 	stagingCommit map[string]bool
 }
 
-func NewApp(gitlabApi *gitlab.Client, pid string) *App {
+func NewApp(gitlabApi *gitlab.Client, pid string, k8sClient *kubernetes.Clientset) *App {
 	return &App{
-		gitlab: gitlabApi,
-		pid:    pid,
+		gitlab:    gitlabApi,
+		pid:       pid,
+		k8sClient: k8sClient,
 
 		mrCommits:     map[string]bool{},
 		prodCommits:   map[string]bool{},
@@ -53,11 +58,12 @@ func NewApp(gitlabApi *gitlab.Client, pid string) *App {
 	}
 }
 
-func (app *App) build(context string, dockerfile string, imageName string, imageTag string) error {
+func (app *App) localBuild(context string, dockerfile string, imageName string, imageTag string) error {
 	// TODO: launch kaniko with the right context, dockerfile and registryTag
+	log.Printf("Image tag for kaniko : %s", imageName+":"+imageTag)
 	cmd := exec.Command("/kaniko/executor",
 		"-c", context,
-		"-f", filepath.Join(context, dockerfile),
+		"-f", dockerfile,
 		"-d", imageName+":"+imageTag)
 
 	var outb, errb bytes.Buffer
@@ -65,21 +71,64 @@ func (app *App) build(context string, dockerfile string, imageName string, image
 	cmd.Stderr = &errb
 	err := cmd.Run()
 	if err != nil {
-		fmt.Println("out:", outb.String(), "err:", errb.String())
+		fmt.Println("\nout:", outb.String(), "err:", errb.String())
 	}
 	return err
+}
+
+func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageTag string) error {
+	// TODO: Spawn a new pod to build the image
+	log.Printf("Image tag for kaniko : %s", imageName+":"+imageTag)
+
+	podName := ""
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: "flux-system",
+			Labels: map[string]string{
+				"imag-build": "esap",
+			},
+		},
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{
+				{
+					Name:            podName,
+					Image:           "gcr.io/kaniko-project/executor:v1.16.0",
+					ImagePullPolicy: v1.PullIfNotPresent,
+					Command: []string{
+						"-c", ctx,
+						"-f", dockerfile,
+						"-d", imageName + ":" + imageTag,
+					},
+				},
+			},
+		},
+	}
+
+	createdPod, err := app.k8sClient.CoreV1().Pods(pod.Namespace).Create(context.TODO(), pod, metav1.CreateOptions{})
+	log.Printf("Pod created %s: %s", podName, createdPod)
+	if err != nil {
+		log.Printf("Error while creating k8s pod: %s", err)
+	}
+	return err
+}
+
+func (app *App) build(context string, dockerfile string, imageName string, imageTag string) error {
+	return app.k8sBuild(context, dockerfile, imageName, imageTag)
 }
 
 func (app *App) prepareContext(branch string, commit string) (string, error) {
 	// clone env at provided commit
 	token := os.Getenv("GITLAB_TOKEN")
-	repository := os.Getenv("GITLAB_URL")
-	fmt.Printf("Prepare context : %s", strings.Replace(repository, "https://", "git://oauth2:"+"TOKEN"+"@", 1))
+	repository := os.Getenv("GITLAB_GIT")
 	gitUrl := strings.Replace(repository, "https://", "git://oauth2:"+token+"@", 1)
 
 	url := gitUrl + "#refs/heads/" + branch
 	if commit != "" {
+		fmt.Printf("Prepare context : %s", strings.Replace(repository, "https://", "git://oauth2:"+"TOKEN"+"@", 1)+"#refs/heads/"+branch+"#"+commit)
 		url = url + "#" + commit
+	} else {
+		fmt.Printf("Prepare context : %s", strings.Replace(repository, "https://", "git://oauth2:"+"TOKEN"+"@", 1)+"#refs/heads/"+branch)
 	}
 
 	return url, nil
@@ -182,6 +231,11 @@ func (app *App) loopProduction() {
 		}
 	}
 
+	if latestTag == "" {
+		log.Printf("Unable to locate any valid production tag")
+		return
+	}
+
 	if _, ok := app.prodCommits[latestTag]; !ok {
 		// Prepare environment
 		context, err := app.prepareContext(PRODUCTION_BRANCH, latestTagCommit)
@@ -246,6 +300,20 @@ func (app *App) Run() {
 	os.Exit(0)
 }
 
+func k8sClient() *kubernetes.Clientset {
+	// creates the in-cluster config
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		panic(err.Error())
+	}
+	// creates the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
+	return clientset
+}
+
 func main() {
 	log.Println("Starting server")
 
@@ -256,6 +324,8 @@ func main() {
 		log.Fatalf("Failed to create client: %v", err)
 	}
 
-	app := NewApp(gitlabApi, os.Getenv("GITLAB_PROJECT_ID"))
+	clientSet := k8sClient()
+
+	app := NewApp(gitlabApi, os.Getenv("GITLAB_PROJECT_ID"), clientSet)
 	app.Run()
 }
