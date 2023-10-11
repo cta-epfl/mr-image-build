@@ -76,11 +76,11 @@ func (app *App) localBuild(context string, dockerfile string, imageName string, 
 	return err
 }
 
-func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageTag string) error {
+func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageTag string, env string) error {
 	// TODO: Spawn a new pod to build the image
 	log.Printf("Image tag for kaniko : %s", imageName+":"+imageTag)
 
-	podName := ""
+	podName := "img-build-" + env
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -96,9 +96,23 @@ func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageT
 					Image:           "gcr.io/kaniko-project/executor:v1.16.0",
 					ImagePullPolicy: v1.PullIfNotPresent,
 					Command: []string{
+						"/kaniko/executor",
 						"-c", ctx,
 						"-f", dockerfile,
 						"-d", imageName + ":" + imageTag,
+					},
+					VolumeMounts: []v1.VolumeMount{
+						{
+							Name:      "registry-config",
+							ReadOnly:  true,
+							MountPath: "/kaniko/.docker/",
+						},
+					},
+					VolumeDevices: []v1.VolumeDevice{
+						{
+							Name: "registry-config",
+							DevicePath: ,
+						}
 					},
 				},
 			},
@@ -113,8 +127,8 @@ func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageT
 	return err
 }
 
-func (app *App) build(context string, dockerfile string, imageName string, imageTag string) error {
-	return app.k8sBuild(context, dockerfile, imageName, imageTag)
+func (app *App) build(context string, dockerfile string, imageName string, imageTag string, env string) error {
+	return app.k8sBuild(context, dockerfile, imageName, imageTag, env)
 }
 
 func (app *App) prepareContext(branch string, commit string) (string, error) {
@@ -172,7 +186,7 @@ func (app *App) loopMr() {
 			}
 
 			// Build image
-			err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, latestCommit.ID)
+			err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, latestCommit.ID, "mr-"+latestCommit.ID)
 			app.prodCommits[latestCommit.ID] = true
 
 			if err != nil {
@@ -200,7 +214,7 @@ func (app *App) loopStaging() {
 
 		// Build image
 		versionId := strconv.Itoa(int(branche.Commit.CommittedDate.Unix()))
-		err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, versionId)
+		err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, versionId, "staging-"+versionId)
 		app.prodCommits[versionId] = true
 
 		if err != nil {
@@ -245,7 +259,7 @@ func (app *App) loopProduction() {
 		}
 
 		// Build image
-		err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, latestTag)
+		err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, latestTag, "prod-"+latestTag)
 		app.prodCommits[latestTag] = true
 
 		if err != nil {
