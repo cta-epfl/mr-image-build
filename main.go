@@ -29,7 +29,9 @@ const (
 	Desynchronized
 )
 
-const IMAGE_REGISTRY = "gitlab.cta-observatory.org:5555/bastien.wermeille/ctao-esap-sdc-portal/esap-mr"
+const IMAGE_REGISTRY_MR = "gitlab.cta-observatory.org:5555/bastien.wermeille/ctao-esap-sdc-portal/esap-mr-"
+const IMAGE_REGISTRY_STAGING = "gitlab.cta-observatory.org:5555/bastien.wermeille/ctao-esap-sdc-portal/esap-staging"
+const IMAGE_REGISTRY_PRODUCTION = "gitlab.cta-observatory.org:5555/bastien.wermeille/ctao-esap-sdc-portal/esap"
 const STAGING_BRANCH = "main"
 const PRODUCTION_BRANCH = "main"
 
@@ -162,7 +164,7 @@ func (app *App) loopMr() {
 		}
 		latestCommit := commits[0]
 
-		if _, ok := app.stagingCommit[latestCommit.ID]; !ok {
+		if _, ok := app.mrCommits[latestCommit.ID]; !ok {
 			// Prepare environment
 			context, err := app.prepareContext(mergeRequest.SourceBranch, latestCommit.ID)
 			if err != nil {
@@ -171,8 +173,9 @@ func (app *App) loopMr() {
 			}
 
 			// Build image
-			err = app.build(context, "Dockerfile", IMAGE_REGISTRY, latestCommit.ID, "mr-"+latestCommit.ID)
-			app.prodCommits[latestCommit.ID] = true
+			err = app.build(context, "Dockerfile", IMAGE_REGISTRY_MR+strconv.Itoa(mergeRequest.IID), latestCommit.ID,
+				"mr-"+strconv.Itoa(mergeRequest.IID)+"-"+latestCommit.ID)
+			app.mrCommits[latestCommit.ID] = true
 
 			if err != nil {
 				log.Printf("Error while building MR image %d: %s", mergeRequest.IID, err)
@@ -199,8 +202,8 @@ func (app *App) loopStaging() {
 
 		// Build image
 		versionId := strconv.Itoa(int(branche.Commit.CommittedDate.Unix()))
-		err = app.build(context, "Dockerfile", IMAGE_REGISTRY, versionId, "staging-"+versionId)
-		app.prodCommits[versionId] = true
+		err = app.build(context, "Dockerfile", IMAGE_REGISTRY_STAGING, versionId, "staging-"+versionId)
+		app.stagingCommit[versionId] = true
 
 		if err != nil {
 			log.Printf("Error while building staging image '%s': %s", versionId, err)
@@ -244,7 +247,7 @@ func (app *App) loopProduction() {
 		}
 
 		// Build image
-		err = app.build(context, "Dockerfile", IMAGE_REGISTRY, latestTag, "prod-"+latestTag)
+		err = app.build(context, "Dockerfile", IMAGE_REGISTRY_PRODUCTION, latestTag, "prod-"+latestTag)
 		app.prodCommits[latestTag] = true
 
 		if err != nil {
