@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -58,26 +56,8 @@ func NewApp(gitlabApi *gitlab.Client, pid string, k8sClient *kubernetes.Clientse
 	}
 }
 
-func (app *App) localBuild(context string, dockerfile string, imageName string, imageTag string) error {
-	// TODO: launch kaniko with the right context, dockerfile and registryTag
-	log.Printf("Image tag for kaniko : %s", imageName+":"+imageTag)
-	cmd := exec.Command("/kaniko/executor",
-		"-c", context,
-		"-f", dockerfile,
-		"-d", imageName+":"+imageTag)
-
-	var outb, errb bytes.Buffer
-	cmd.Stdout = &outb
-	cmd.Stderr = &errb
-	err := cmd.Run()
-	if err != nil {
-		fmt.Println("\nout:", outb.String(), "err:", errb.String())
-	}
-	return err
-}
-
-func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageTag string, env string) error {
-	// TODO: Spawn a new pod to build the image
+func (app *App) build(ctx string, dockerfile string, imageName string, imageTag string, env string) error {
+	// Spawn a new pod to build the image
 	log.Printf("Image tag for kaniko : %s", imageName+":"+imageTag)
 
 	podName := "img-build-" + env
@@ -99,6 +79,7 @@ func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageT
 					Command: []string{
 						"/kaniko/executor",
 						"-c", ctx,
+						"--context-sub-path", "esap",
 						"-f", dockerfile,
 						"-d", imageName + ":" + imageTag,
 					},
@@ -138,10 +119,6 @@ func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageT
 	return err
 }
 
-func (app *App) build(context string, dockerfile string, imageName string, imageTag string, env string) error {
-	return app.k8sBuild(context, dockerfile, imageName, imageTag, env)
-}
-
 func (app *App) prepareContext(branch string, commit string) (string, error) {
 	// clone env at provided commit
 	token := os.Getenv("GITLAB_TOKEN")
@@ -164,10 +141,6 @@ func (app *App) loopMr() {
 	targetBranch := os.Getenv("TARGET_BRANCH")
 	projectId := os.Getenv("GITLAB_PROJECT_ID")
 
-	// TODO: Loop production -> tags
-	// TODO: Loop staging -> most recent commit on a given branch
-	// TODO: Loop MR -> most recent commit on a given MR
-
 	openedState := "opened"
 	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(projectId, &gitlab.ListProjectMergeRequestsOptions{
 		TargetBranch: &targetBranch,
@@ -180,10 +153,10 @@ func (app *App) loopMr() {
 	}
 
 	for _, mergeRequest := range openMergeRequests {
-		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.pid, mergeRequest.ID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
+		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.pid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
 		// Latest commit
 		if err != nil || len(commits) != 1 {
-			log.Printf("No commit for MR %d", mergeRequest.ID)
+			log.Printf("No commit for MR %d - %s", mergeRequest.IID, err)
 			continue
 		}
 		latestCommit := commits[0]
@@ -201,7 +174,7 @@ func (app *App) loopMr() {
 			app.prodCommits[latestCommit.ID] = true
 
 			if err != nil {
-				log.Printf("Error while building MR image %d: %s", mergeRequest.ID, err)
+				log.Printf("Error while building MR image %d: %s", mergeRequest.IID, err)
 			}
 		}
 	}
@@ -280,14 +253,6 @@ func (app *App) loopProduction() {
 }
 
 func (app *App) loop() {
-	// TODO: implement
-	// 0. Local store of the latest built images per MR
-	// 1. Load images from registry
-	// 2. Load latest commit tag from repository
-	// 3. Launch a build for the image
-	// 4. Clean registry built images for MR closed
-	// 5. Configure build for staging and prod
-
 	app.loopProduction()
 	app.loopStaging()
 	app.loopMr()
