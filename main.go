@@ -92,6 +92,7 @@ func (app *App) build(ctx string, dockerfile string, imageName string, imageTag 
 					},
 				},
 			},
+			RestartPolicy: v1.RestartPolicyNever,
 			Volumes: []v1.Volume{
 				{
 					Name: "registry-config",
@@ -170,7 +171,7 @@ func (app *App) loopMr() {
 			}
 
 			// Build image
-			err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, latestCommit.ID, "mr-"+latestCommit.ID)
+			err = app.build(context, "Dockerfile", IMAGE_REGISTRY, latestCommit.ID, "mr-"+latestCommit.ID)
 			app.prodCommits[latestCommit.ID] = true
 
 			if err != nil {
@@ -198,7 +199,7 @@ func (app *App) loopStaging() {
 
 		// Build image
 		versionId := strconv.Itoa(int(branche.Commit.CommittedDate.Unix()))
-		err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, versionId, "staging-"+versionId)
+		err = app.build(context, "Dockerfile", IMAGE_REGISTRY, versionId, "staging-"+versionId)
 		app.prodCommits[versionId] = true
 
 		if err != nil {
@@ -243,7 +244,7 @@ func (app *App) loopProduction() {
 		}
 
 		// Build image
-		err = app.build(context, "esap/Dockerfile", IMAGE_REGISTRY, latestTag, "prod-"+latestTag)
+		err = app.build(context, "Dockerfile", IMAGE_REGISTRY, latestTag, "prod-"+latestTag)
 		app.prodCommits[latestTag] = true
 
 		if err != nil {
