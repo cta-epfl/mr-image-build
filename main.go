@@ -261,6 +261,9 @@ func (app *App) loop() {
 	app.loopProduction()
 	app.loopStaging()
 	app.loopMr()
+
+	// TODO: Clean terminated builds
+	// TODO: Notify gitlab with crashed builds
 }
 
 func (app *App) Run() {
