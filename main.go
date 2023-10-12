@@ -81,6 +81,7 @@ func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageT
 	log.Printf("Image tag for kaniko : %s", imageName+":"+imageTag)
 
 	podName := "img-build-" + env
+
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -108,11 +109,21 @@ func (app *App) k8sBuild(ctx string, dockerfile string, imageName string, imageT
 							MountPath: "/kaniko/.docker/",
 						},
 					},
-					VolumeDevices: []v1.VolumeDevice{
-						{
-							Name: "registry-config",
-							DevicePath: ,
-						}
+				},
+			},
+			Volumes: []v1.Volume{
+				{
+					Name: "registry-config",
+					VolumeSource: v1.VolumeSource{
+						Secret: &v1.SecretVolumeSource{
+							SecretName: "esap-image-deploy-secret",
+							Items: []v1.KeyToPath{
+								{
+									Key:  ".dockerconfigjson",
+									Path: "config.json",
+								},
+							},
+						},
 					},
 				},
 			},
