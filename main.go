@@ -173,7 +173,8 @@ func (app *App) loopMr() {
 			}
 
 			// Build image
-			err = app.build(context, "Dockerfile", IMAGE_REGISTRY_MR+strconv.Itoa(mergeRequest.IID), latestCommit.ID,
+			versionId := strconv.Itoa(int(latestCommit.CommittedDate.Unix()))
+			err = app.build(context, "Dockerfile", IMAGE_REGISTRY_MR+strconv.Itoa(mergeRequest.IID), versionId,
 				"mr-"+strconv.Itoa(mergeRequest.IID)+"-"+latestCommit.ID)
 			app.mrCommits[latestCommit.ID] = true
 
