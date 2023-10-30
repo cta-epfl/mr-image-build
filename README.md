@@ -6,12 +6,3 @@ based on a [question](https://github.com/fluxcd/flux2/discussions/8310) regardin
 ## status
 
 this is a proof of concept and currently only serves to validate the idea isn't crazy
-
-## TODO
-
-- [ ] Spawn esap pods in addition to the namespace
-- [ ] Reference the right docker image
-- [ ] Build docker image ?
-- [ ] Drop docker image once the MR is closed ?
-- [ ] Detect new commits on PR
-- [ ] Update docker image when new commits are added
