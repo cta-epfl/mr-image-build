@@ -147,7 +147,7 @@ func (app *App) prepareContext(branch string, commit string) (string, error) {
 func (app *App) cleanMrRegistry() {
 	openedState := "opened"
 	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.config.repoPid, &gitlab.ListProjectMergeRequestsOptions{
-		TargetBranch: &app.config.registryStaging,
+		TargetBranch: &app.config.repoStagingBranch,
 		State:        &openedState,
 	})
 	if err != nil {
@@ -160,7 +160,7 @@ func (app *App) cleanMrRegistry() {
 	for _, mergeRequest := range openMergeRequests {
 		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.config.repoPid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
 		// Latest commit
-		if err != nil || len(commits) != 1 {
+		if err != nil || len(commits) == 0 {
 			log.Printf("No commit for MR %d - %s", mergeRequest.IID, err)
 			indexedMergeRequests[mergeRequest.IID] = ""
 		} else {
@@ -415,6 +415,7 @@ func main() {
 	clientSet := k8sClient()
 	config := &AppConfig{
 		repoPid:              os.Getenv("GITLAB_REPO_ID"),
+		repoToken:            os.Getenv("GITLAB_TOKEN"),
 		repoGitUrl:           os.Getenv("GITLAB_GIT_URL"),
 		repoApiUrl:           os.Getenv("GITLAB_API_URL"),
 		repoStagingBranch:    os.Getenv("GIT_BRANCH"),
