@@ -29,16 +29,23 @@ const (
 	Desynchronized
 )
 
-const IMAGE_REGISTRY_MR = "gitlab.cta-observatory.org:5555/bastien.wermeille/ctao-esap-sdc-portal/esap-mr-"
-const IMAGE_REGISTRY_STAGING = "gitlab.cta-observatory.org:5555/bastien.wermeille/ctao-esap-sdc-portal/esap-staging"
-const IMAGE_REGISTRY_PRODUCTION = "gitlab.cta-observatory.org:5555/bastien.wermeille/ctao-esap-sdc-portal/esap"
-const STAGING_BRANCH = "main"
-const PRODUCTION_BRANCH = "main"
+type AppConfig struct {
+	repoPid              string
+	repoToken            string
+	repoGitUrl           string
+	repoApiUrl           string
+	repoStagingBranch    string
+	repoProductionBranch string
 
-// TODO: Create new config struct -> including pid, target_branch and so on
+	registryPid        string
+	registryMr         string
+	registryStaging    string
+	registryProduction string
+}
+
 type App struct {
+	config    *AppConfig
 	gitlab    *gitlab.Client
-	pid       string
 	k8sClient *kubernetes.Clientset
 
 	mrCommits     map[string]bool
@@ -46,10 +53,10 @@ type App struct {
 	stagingCommit map[string]bool
 }
 
-func NewApp(gitlabApi *gitlab.Client, pid string, k8sClient *kubernetes.Clientset) *App {
+func NewApp(gitlabApi *gitlab.Client, k8sClient *kubernetes.Clientset, config *AppConfig) *App {
 	return &App{
+		config:    config,
 		gitlab:    gitlabApi,
-		pid:       pid,
 		k8sClient: k8sClient,
 
 		mrCommits:     map[string]bool{},
@@ -124,27 +131,23 @@ func (app *App) build(ctx string, dockerfile string, imageName string, imageTag 
 
 func (app *App) prepareContext(branch string, commit string) (string, error) {
 	// clone env at provided commit
-	token := os.Getenv("GITLAB_TOKEN")
-	repository := os.Getenv("GITLAB_GIT")
-	gitUrl := strings.Replace(repository, "https://", "git://oauth2:"+token+"@", 1)
+	gitUrl := strings.Replace(app.config.repoGitUrl, "https://", "git://oauth2:"+app.config.repoToken+"@", 1)
 
 	url := gitUrl + "#refs/heads/" + branch
 	if commit != "" {
-		fmt.Printf("Prepare context : %s", strings.Replace(repository, "https://", "git://oauth2:"+"TOKEN"+"@", 1)+"#refs/heads/"+branch+"#"+commit)
+		fmt.Printf("Prepare context : %s", strings.Replace(app.config.repoGitUrl, "https://", "git://oauth2:"+"TOKEN"+"@", 1)+"#refs/heads/"+branch+"#"+commit)
 		url = url + "#" + commit
 	} else {
-		fmt.Printf("Prepare context : %s", strings.Replace(repository, "https://", "git://oauth2:"+"TOKEN"+"@", 1)+"#refs/heads/"+branch)
+		fmt.Printf("Prepare context : %s", strings.Replace(app.config.repoGitUrl, "https://", "git://oauth2:"+"TOKEN"+"@", 1)+"#refs/heads/"+branch)
 	}
 
 	return url, nil
 }
 
 func (app *App) cleanMrRegistry() {
-	targetBranch := os.Getenv("TARGET_BRANCH")
-
 	openedState := "opened"
-	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.pid, &gitlab.ListProjectMergeRequestsOptions{
-		TargetBranch: &targetBranch,
+	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.config.repoPid, &gitlab.ListProjectMergeRequestsOptions{
+		TargetBranch: &app.config.registryStaging,
 		State:        &openedState,
 	})
 	if err != nil {
@@ -155,7 +158,7 @@ func (app *App) cleanMrRegistry() {
 
 	indexedMergeRequests := map[int]string{}
 	for _, mergeRequest := range openMergeRequests {
-		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.pid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
+		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.config.repoPid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
 		// Latest commit
 		if err != nil || len(commits) != 1 {
 			log.Printf("No commit for MR %d - %s", mergeRequest.IID, err)
@@ -167,9 +170,7 @@ func (app *App) cleanMrRegistry() {
 		}
 	}
 
-	// TODO: Extract in config
-	registryProjectId := os.Getenv("GITLAB_REGISTRY_ID")
-	registries, _, err := app.gitlab.ContainerRegistry.ListProjectRegistryRepositories(registryProjectId, &gitlab.ListRegistryRepositoriesOptions{})
+	registries, _, err := app.gitlab.ContainerRegistry.ListProjectRegistryRepositories(app.config.registryPid, &gitlab.ListRegistryRepositoriesOptions{})
 	if err != nil {
 		log.Printf("Unable to retrieve Registry informations: %s", err)
 		return
@@ -186,10 +187,10 @@ func (app *App) cleanMrRegistry() {
 			intId, err := strconv.Atoi(id)
 			if err == nil {
 				if latestCommit, ok := indexedMergeRequests[intId]; ok {
-					// TODO: Load tags
-					tags, _, err := app.gitlab.ContainerRegistry.ListRegistryRepositoryTags(registryProjectId, registry.ID, &gitlab.ListRegistryRepositoryTagsOptions{})
+					// Load tags
+					tags, _, err := app.gitlab.ContainerRegistry.ListRegistryRepositoryTags(app.config.registryPid, registry.ID, &gitlab.ListRegistryRepositoryTagsOptions{})
 					if err != nil {
-						log.Printf("Unable to load registry tags :", err)
+						log.Printf("Unable to load registry tags : %s", err)
 						continue
 					}
 
@@ -210,7 +211,7 @@ func (app *App) cleanMrRegistry() {
 						for _, tag := range tags {
 							if tag.Name != latestCommit {
 								log.Printf("Remove registry tag %s:%s (identified latest: %s)", registry.Name, tag.Name, latestCommit)
-								_, err := app.gitlab.ContainerRegistry.DeleteRegistryRepositoryTag(registryProjectId, registry.ID, tag.Name)
+								_, err := app.gitlab.ContainerRegistry.DeleteRegistryRepositoryTag(app.config.registryPid, registry.ID, tag.Name)
 								if err != nil {
 									log.Printf("Unable to delete registry tag %s: %s", tag.Name, err)
 								}
@@ -219,7 +220,7 @@ func (app *App) cleanMrRegistry() {
 					}
 				} else {
 					log.Printf("Remove full registry : %s", registry.Name)
-					_, err := app.gitlab.ContainerRegistry.DeleteRegistryRepository(registryProjectId, registry.ID)
+					_, err := app.gitlab.ContainerRegistry.DeleteRegistryRepository(app.config.registryPid, registry.ID)
 					if err != nil {
 						log.Printf("Unable to drop registry %s: %s", registry.Name, err)
 					}
@@ -230,12 +231,9 @@ func (app *App) cleanMrRegistry() {
 }
 
 func (app *App) loopMr() {
-	// TODO: Extract in option struct
-	targetBranch := os.Getenv("TARGET_BRANCH")
-
 	openedState := "opened"
-	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.pid, &gitlab.ListProjectMergeRequestsOptions{
-		TargetBranch: &targetBranch,
+	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.config.repoPid, &gitlab.ListProjectMergeRequestsOptions{
+		TargetBranch: &app.config.repoStagingBranch,
 		State:        &openedState,
 	})
 
@@ -245,7 +243,7 @@ func (app *App) loopMr() {
 	}
 
 	for _, mergeRequest := range openMergeRequests {
-		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.pid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
+		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.config.repoPid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
 		// Latest commit
 		if err != nil || len(commits) != 1 {
 			log.Printf("No commit for MR %d - %s", mergeRequest.IID, err)
@@ -263,7 +261,7 @@ func (app *App) loopMr() {
 
 			// Build image
 			versionId := strconv.Itoa(int(latestCommit.CommittedDate.Unix()))
-			err = app.build(context, "Dockerfile", IMAGE_REGISTRY_MR+strconv.Itoa(mergeRequest.IID), versionId,
+			err = app.build(context, "Dockerfile", app.config.registryMr+strconv.Itoa(mergeRequest.IID), versionId,
 				"mr-"+strconv.Itoa(mergeRequest.IID)+"-"+latestCommit.ID)
 			app.mrCommits[latestCommit.ID] = true
 
@@ -276,15 +274,15 @@ func (app *App) loopMr() {
 
 func (app *App) loopStaging() {
 	// Load latest commit
-	branche, _, err := app.gitlab.Branches.GetBranch(app.pid, STAGING_BRANCH)
+	branche, _, err := app.gitlab.Branches.GetBranch(app.config.repoPid, app.config.repoStagingBranch)
 	if err != nil {
-		log.Printf("Unable to load branch: %s", STAGING_BRANCH)
+		log.Printf("Unable to load branch: %s", app.config.repoStagingBranch)
 		return
 	}
 
 	if _, ok := app.stagingCommit[branche.Commit.ID]; !ok {
 		// Prepare environment
-		context, err := app.prepareContext(STAGING_BRANCH, branche.Commit.ID)
+		context, err := app.prepareContext(app.config.repoStagingBranch, branche.Commit.ID)
 		if err != nil {
 			log.Printf("Error while cloning staging environement: %s", err)
 			return
@@ -292,7 +290,7 @@ func (app *App) loopStaging() {
 
 		// Build image
 		versionId := strconv.Itoa(int(branche.Commit.CommittedDate.Unix()))
-		err = app.build(context, "Dockerfile", IMAGE_REGISTRY_STAGING, versionId, "staging-"+versionId)
+		err = app.build(context, "Dockerfile", app.config.repoStagingBranch, versionId, "staging-"+versionId)
 		app.stagingCommit[versionId] = true
 
 		if err != nil {
@@ -303,7 +301,7 @@ func (app *App) loopStaging() {
 
 func (app *App) loopProduction() {
 	// Load latest tag
-	tags, _, err := app.gitlab.Tags.ListTags(app.pid, &gitlab.ListTagsOptions{})
+	tags, _, err := app.gitlab.Tags.ListTags(app.config.repoPid, &gitlab.ListTagsOptions{})
 	if err != nil {
 		return
 	}
@@ -330,14 +328,14 @@ func (app *App) loopProduction() {
 
 	if _, ok := app.prodCommits[latestTag]; !ok {
 		// Prepare environment
-		context, err := app.prepareContext(PRODUCTION_BRANCH, latestTagCommit)
+		context, err := app.prepareContext(app.config.repoProductionBranch, latestTagCommit)
 		if err != nil {
 			log.Printf("Error while cloning production environement: %s", err)
 			return
 		}
 
 		// Build image
-		err = app.build(context, "Dockerfile", IMAGE_REGISTRY_PRODUCTION, latestTag, "prod-"+latestTag)
+		err = app.build(context, "Dockerfile", app.config.registryProduction, latestTag, "prod-"+latestTag)
 		app.prodCommits[latestTag] = true
 
 		if err != nil {
@@ -352,7 +350,9 @@ func (app *App) loop() {
 	app.loopMr()
 	app.cleanMrRegistry()
 
-	// TODO: Clean terminated builds
+	// TODO: Clean terminated builds for staging
+	// TODO: Clean terminated builds for production
+
 	// TODO: Notify gitlab with crashed builds
 }
 
@@ -405,7 +405,7 @@ func k8sClient() *kubernetes.Clientset {
 func main() {
 	log.Println("Starting server")
 
-	gitlabUrl := os.Getenv("GITLAB_URL")
+	gitlabUrl := os.Getenv("GITLAB_API_URL")
 	gitlabToken := os.Getenv("GITLAB_TOKEN")
 	gitlabApi, err := gitlab.NewClient(gitlabToken, gitlab.WithBaseURL(gitlabUrl))
 	if err != nil {
@@ -413,7 +413,19 @@ func main() {
 	}
 
 	clientSet := k8sClient()
+	config := &AppConfig{
+		repoPid:              os.Getenv("GITLAB_REPO_ID"),
+		repoGitUrl:           os.Getenv("GITLAB_GIT_URL"),
+		repoApiUrl:           os.Getenv("GITLAB_API_URL"),
+		repoStagingBranch:    os.Getenv("GIT_BRANCH"),
+		repoProductionBranch: os.Getenv("GIT_BRANCH"),
 
-	app := NewApp(gitlabApi, os.Getenv("GITLAB_PROJECT_ID"), clientSet)
+		registryPid:        os.Getenv("GITLAB_REGISTRY_ID"),
+		registryMr:         os.Getenv("GITLAB_REGISTRY_MR"),
+		registryStaging:    os.Getenv("GITLAB_REGISTRY_STAGING"),
+		registryProduction: os.Getenv("GITLAB_REGISTRY_PRODUCTION"),
+	}
+
+	app := NewApp(gitlabApi, clientSet, config)
 	app.Run()
 }
