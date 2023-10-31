@@ -139,13 +139,102 @@ func (app *App) prepareContext(branch string, commit string) (string, error) {
 	return url, nil
 }
 
+func (app *App) cleanMrRegistry() {
+	targetBranch := os.Getenv("TARGET_BRANCH")
+
+	openedState := "opened"
+	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.pid, &gitlab.ListProjectMergeRequestsOptions{
+		TargetBranch: &targetBranch,
+		State:        &openedState,
+	})
+	if err != nil {
+		// Unable to rertieve gitlab informations
+		log.Printf("Unable to retrieve informations MR: %s", err)
+		return
+	}
+
+	indexedMergeRequests := map[int]string{}
+	for _, mergeRequest := range openMergeRequests {
+		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.pid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
+		// Latest commit
+		if err != nil || len(commits) != 1 {
+			log.Printf("No commit for MR %d - %s", mergeRequest.IID, err)
+			indexedMergeRequests[mergeRequest.IID] = ""
+		} else {
+			latestCommit := commits[0]
+			versionId := strconv.Itoa(int(latestCommit.CommittedDate.Unix()))
+			indexedMergeRequests[mergeRequest.IID] = versionId
+		}
+	}
+
+	// TODO: Extract in config
+	registryProjectId := os.Getenv("GITLAB_REGISTRY_ID")
+	registries, _, err := app.gitlab.ContainerRegistry.ListProjectRegistryRepositories(registryProjectId, &gitlab.ListRegistryRepositoriesOptions{})
+	if err != nil {
+		log.Printf("Unable to retrieve Registry informations: %s", err)
+		return
+	}
+
+	log.Printf("Existing registries: %v", registries)
+	for _, registry := range registries {
+		// Check if has right prefix
+		prefix := "esap-mr-"
+		if strings.HasPrefix(registry.Name, prefix) {
+			// Check if registry fit open MR
+			id := registry.Name[len(prefix):]
+			log.Printf("Identified id for registry: %s from %s", id, registry.Name)
+			intId, err := strconv.Atoi(id)
+			if err == nil {
+				if latestCommit, ok := indexedMergeRequests[intId]; ok {
+					// TODO: Load tags
+					tags, _, err := app.gitlab.ContainerRegistry.ListRegistryRepositoryTags(registryProjectId, registry.ID, &gitlab.ListRegistryRepositoryTagsOptions{})
+					if err != nil {
+						log.Printf("Unable to load registry tags :", err)
+						continue
+					}
+
+					if len(tags) <= 1 {
+						continue
+					}
+
+					indexedtags := map[string]bool{}
+					for _, tag := range tags {
+						indexedtags[tag.Name] = true
+					}
+
+					log.Printf("Identified tags (%s): %v", latestCommit, tags)
+					// Identify latest build tag for MR
+					if _, ok := indexedtags[latestCommit]; ok {
+						log.Printf("Remove partial registry: %s", registry.Name)
+						// Remove all other tags
+						for _, tag := range tags {
+							if tag.Name != latestCommit {
+								log.Printf("Remove registry tag %s:%s (identified latest: %s)", registry.Name, tag.Name, latestCommit)
+								_, err := app.gitlab.ContainerRegistry.DeleteRegistryRepositoryTag(registryProjectId, registry.ID, tag.Name)
+								if err != nil {
+									log.Printf("Unable to delete registry tag %s: %s", tag.Name, err)
+								}
+							}
+						}
+					}
+				} else {
+					log.Printf("Remove full registry : %s", registry.Name)
+					_, err := app.gitlab.ContainerRegistry.DeleteRegistryRepository(registryProjectId, registry.ID)
+					if err != nil {
+						log.Printf("Unable to drop registry %s: %s", registry.Name, err)
+					}
+				}
+			}
+		}
+	}
+}
+
 func (app *App) loopMr() {
 	// TODO: Extract in option struct
 	targetBranch := os.Getenv("TARGET_BRANCH")
-	projectId := os.Getenv("GITLAB_PROJECT_ID")
 
 	openedState := "opened"
-	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(projectId, &gitlab.ListProjectMergeRequestsOptions{
+	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.pid, &gitlab.ListProjectMergeRequestsOptions{
 		TargetBranch: &targetBranch,
 		State:        &openedState,
 	})
@@ -261,6 +350,7 @@ func (app *App) loop() {
 	app.loopProduction()
 	app.loopStaging()
 	app.loopMr()
+	app.cleanMrRegistry()
 
 	// TODO: Clean terminated builds
 	// TODO: Notify gitlab with crashed builds
