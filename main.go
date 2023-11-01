@@ -176,7 +176,7 @@ func (app *App) loopMr() {
 			// Build image
 			versionId := strconv.Itoa(int(latestCommit.CommittedDate.Unix()))
 			err = app.build(context, "Dockerfile", app.config.registryMr+strconv.Itoa(mergeRequest.IID), versionId,
-				"mr-"+strconv.Itoa(mergeRequest.IID)+"-"+latestCommit.ID)
+				"mr-"+strconv.Itoa(mergeRequest.IID)+"-"+versionId)
 			app.mrCommits[latestCommit.ID] = true
 
 			if err != nil {
@@ -289,7 +289,7 @@ func (app *App) loopStaging() {
 
 		// Build image
 		versionId := strconv.Itoa(int(branche.Commit.CommittedDate.Unix()))
-		err = app.build(context, "Dockerfile", app.config.repoStagingBranch, versionId, "staging-"+versionId)
+		err = app.build(context, "Dockerfile", app.config.registryStaging, versionId, "staging-"+versionId)
 		app.stagingCommit[versionId] = true
 
 		if err != nil {
