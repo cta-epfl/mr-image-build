@@ -144,6 +144,48 @@ func (app *App) prepareContext(branch string, commit string) (string, error) {
 	return url, nil
 }
 
+func (app *App) loopMr() {
+	openedState := "opened"
+	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.config.repoPid, &gitlab.ListProjectMergeRequestsOptions{
+		TargetBranch: &app.config.repoStagingBranch,
+		State:        &openedState,
+	})
+
+	if err != nil {
+		log.Printf("Unable to load MR")
+		return
+	}
+
+	for _, mergeRequest := range openMergeRequests {
+		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.config.repoPid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
+		// Latest commit
+		if err != nil || len(commits) != 1 {
+			log.Printf("No commit for MR %d - %s", mergeRequest.IID, err)
+			continue
+		}
+		latestCommit := commits[0]
+
+		if _, ok := app.mrCommits[latestCommit.ID]; !ok {
+			// Prepare environment
+			context, err := app.prepareContext(mergeRequest.SourceBranch, latestCommit.ID)
+			if err != nil {
+				log.Printf("Error while cloning MR environement: %s", err)
+				continue
+			}
+
+			// Build image
+			versionId := strconv.Itoa(int(latestCommit.CommittedDate.Unix()))
+			err = app.build(context, "Dockerfile", app.config.registryMr+strconv.Itoa(mergeRequest.IID), versionId,
+				"mr-"+strconv.Itoa(mergeRequest.IID)+"-"+latestCommit.ID)
+			app.mrCommits[latestCommit.ID] = true
+
+			if err != nil {
+				log.Printf("Error while building MR image %d: %s", mergeRequest.IID, err)
+			}
+		}
+	}
+}
+
 func (app *App) cleanMrRegistry() {
 	openedState := "opened"
 	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.config.repoPid, &gitlab.ListProjectMergeRequestsOptions{
@@ -230,53 +272,11 @@ func (app *App) cleanMrRegistry() {
 	}
 }
 
-func (app *App) loopMr() {
-	openedState := "opened"
-	openMergeRequests, _, err := app.gitlab.MergeRequests.ListProjectMergeRequests(app.config.repoPid, &gitlab.ListProjectMergeRequestsOptions{
-		TargetBranch: &app.config.repoStagingBranch,
-		State:        &openedState,
-	})
-
-	if err != nil {
-		log.Printf("Unable to load MR")
-		return
-	}
-
-	for _, mergeRequest := range openMergeRequests {
-		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.config.repoPid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
-		// Latest commit
-		if err != nil || len(commits) != 1 {
-			log.Printf("No commit for MR %d - %s", mergeRequest.IID, err)
-			continue
-		}
-		latestCommit := commits[0]
-
-		if _, ok := app.mrCommits[latestCommit.ID]; !ok {
-			// Prepare environment
-			context, err := app.prepareContext(mergeRequest.SourceBranch, latestCommit.ID)
-			if err != nil {
-				log.Printf("Error while cloning MR environement: %s", err)
-				continue
-			}
-
-			// Build image
-			versionId := strconv.Itoa(int(latestCommit.CommittedDate.Unix()))
-			err = app.build(context, "Dockerfile", app.config.registryMr+strconv.Itoa(mergeRequest.IID), versionId,
-				"mr-"+strconv.Itoa(mergeRequest.IID)+"-"+latestCommit.ID)
-			app.mrCommits[latestCommit.ID] = true
-
-			if err != nil {
-				log.Printf("Error while building MR image %d: %s", mergeRequest.IID, err)
-			}
-		}
-	}
-}
-
 func (app *App) loopStaging() {
 	// Load latest commit
 	branche, _, err := app.gitlab.Branches.GetBranch(app.config.repoPid, app.config.repoStagingBranch)
 	if err != nil {
-		log.Printf("Unable to load branch: %s", app.config.repoStagingBranch)
+		log.Printf("Staging Loop: Unable to load branch %s: %s", app.config.repoStagingBranch, err)
 		return
 	}
 
@@ -295,6 +295,60 @@ func (app *App) loopStaging() {
 
 		if err != nil {
 			log.Printf("Error while building staging image '%s': %s", versionId, err)
+		}
+	}
+}
+
+func (app *App) cleanStagingRegistry() {
+	registries, _, err := app.gitlab.ContainerRegistry.ListProjectRegistryRepositories(app.config.registryPid, &gitlab.ListRegistryRepositoriesOptions{})
+	if err != nil {
+		log.Printf("Unable to retrieve Registry informations: %s", err)
+		return
+	}
+
+	registryId := -1
+	splits := strings.Split(app.config.registryStaging, "/")
+	registryName := splits[len(splits)-1]
+
+	for _, registry := range registries {
+		if registry.Name == registryName {
+			registryId = registry.ID
+			break
+		}
+	}
+	if registryId == -1 {
+		log.Printf("No staging registry identified for cleaning")
+		return
+	}
+
+	// Load latest commit
+	branche, _, err := app.gitlab.Branches.GetBranch(app.config.repoPid, app.config.repoStagingBranch)
+	if err != nil {
+		log.Printf("Staging cleaning: Unable to load branch %s : %s", app.config.repoStagingBranch, err)
+		return
+	}
+	latestCommit := strconv.Itoa(int(branche.Commit.CommittedDate.Unix()))
+
+	// Load tags
+	tags, _, err := app.gitlab.ContainerRegistry.ListRegistryRepositoryTags(app.config.registryPid, registryId, &gitlab.ListRegistryRepositoryTagsOptions{})
+	if err != nil {
+		log.Printf("Unable to load registry tags : %s", err)
+		return
+	}
+
+	if len(tags) <= 1 {
+		return
+	}
+	log.Printf("Identified tags (%s): %v", branche.Commit.ID, tags)
+
+	// Remove old tags
+	for _, tag := range tags {
+		if tag.Name != latestCommit {
+			log.Printf("Remove registry tag %s:%s (identified latest: %s)", registryName, tag.Name, latestCommit)
+			_, err := app.gitlab.ContainerRegistry.DeleteRegistryRepositoryTag(app.config.registryPid, registryId, tag.Name)
+			if err != nil {
+				log.Printf("Unable to delete registry tag %s: %s", tag.Name, err)
+			}
 		}
 	}
 }
@@ -348,10 +402,9 @@ func (app *App) loop() {
 	app.loopProduction()
 	app.loopStaging()
 	app.loopMr()
-	app.cleanMrRegistry()
 
-	// TODO: Clean terminated builds for staging
-	// TODO: Clean terminated builds for production
+	app.cleanMrRegistry()
+	app.cleanStagingRegistry()
 
 	// TODO: Notify gitlab with crashed builds
 }
@@ -418,8 +471,8 @@ func main() {
 		repoToken:            os.Getenv("GITLAB_TOKEN"),
 		repoGitUrl:           os.Getenv("GITLAB_GIT_URL"),
 		repoApiUrl:           os.Getenv("GITLAB_API_URL"),
-		repoStagingBranch:    os.Getenv("GIT_BRANCH"),
-		repoProductionBranch: os.Getenv("GIT_BRANCH"),
+		repoStagingBranch:    os.Getenv("GITLAB_BRANCH"),
+		repoProductionBranch: os.Getenv("GITLAB_BRANCH"),
 
 		registryPid:        os.Getenv("GITLAB_REGISTRY_ID"),
 		registryMr:         os.Getenv("GITLAB_REGISTRY_MR"),
