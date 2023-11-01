@@ -193,7 +193,6 @@ func (app *App) cleanMrRegistry() {
 		State:        &openedState,
 	})
 	if err != nil {
-		// Unable to rertieve gitlab informations
 		log.Printf("Unable to retrieve informations MR: %s", err)
 		return
 	}
@@ -201,7 +200,7 @@ func (app *App) cleanMrRegistry() {
 	indexedMergeRequests := map[int]string{}
 	for _, mergeRequest := range openMergeRequests {
 		commits, _, err := app.gitlab.MergeRequests.GetMergeRequestCommits(app.config.repoPid, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{PerPage: 1})
-		// Latest commit
+
 		if err != nil || len(commits) == 0 {
 			log.Printf("No commit for MR %d - %s", mergeRequest.IID, err)
 			indexedMergeRequests[mergeRequest.IID] = ""
