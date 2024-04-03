@@ -1,5 +1,5 @@
 # helm: .containers.main
-FROM golang:1.21.1-alpine3.18 as builder
+FROM golang:1.22.1-alpine3.18 as builder
 
 ARG GOPROXY
 
@@ -15,7 +15,7 @@ WORKDIR /app
 RUN export LOCAL_DEV=NOT
 RUN CGO_ENABLED=0 go build -o service
 
-FROM golang:1.21.1-alpine3.18 AS final
+FROM golang:1.22.1-alpine3.18 AS final
 
 WORKDIR /app
 COPY --from=builder /app/service .
