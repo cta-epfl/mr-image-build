@@ -4,7 +4,7 @@ go 1.21.1
 
 require (
 	github.com/Masterminds/semver/v3 v3.2.1
-	github.com/xanzy/go-gitlab v0.101.0
+	github.com/xanzy/go-gitlab v0.102.0
 	k8s.io/api v0.29.3
 	k8s.io/apimachinery v0.29.3
 	k8s.io/client-go v0.29.3
