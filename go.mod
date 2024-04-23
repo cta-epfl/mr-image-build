@@ -1,6 +1,7 @@
 module cta.epfl.ch/mr-feature-controller
 
-go 1.21.1
+go 1.22.0
+
 toolchain go1.22.2
 
 require (
