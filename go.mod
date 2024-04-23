@@ -2,8 +2,6 @@ module cta.epfl.ch/mr-feature-controller
 
 go 1.22.2
 
-toolchain go1.22.2
-
 require (
 	github.com/Masterminds/semver/v3 v3.2.1
 	github.com/xanzy/go-gitlab v0.103.0
